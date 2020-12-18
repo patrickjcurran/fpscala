@@ -51,6 +51,9 @@ trait Stream[+A] {
   def map[B](f: A => B): Stream[B] =
     foldRight(empty[B])( (a, b) => cons(f(a), b))
 
+  def map2[B](f: A => B): Stream[B] =
+    runWithTransducer(Stream.map[A, B, Stream[B]](f))
+
   def filter(p: A => Boolean): Stream[A] =
     foldRight(empty[A])( (a, acc) => if (p(a)) cons(a, acc) else acc)
 
@@ -127,6 +130,7 @@ trait Stream[+A] {
   ): D = foldWithTransducer(transducer)(empty[X])( (a,b) => cons(a, b))
 
 
+
 }
 case object Empty extends Stream[Nothing]
 case class Cons[+A](h: () => A, t: () => Stream[A]) extends Stream[A]
@@ -190,10 +194,18 @@ object Stream {
       (b, cons(b, t._2))
   }
   }
+
+  def map[A, B, C](f: A => B): Transducer[StreamF[B, *], C, StreamF[A, *], C] = { xf => {
+    case EmptyF => xf(EmptyF)
+    case ConsF(h, t) => xf(ConsF(() => f(h()), t))
+  }
+  }
 }
 
 object test extends App {
   println(fibsUnfold.take(10).toList())
 
   println(Stream(1,2,3,4).scanRight(0)(_ + _).toList())
+
+  println(Stream(1,2,3).map2(5.*).toList())
 }
