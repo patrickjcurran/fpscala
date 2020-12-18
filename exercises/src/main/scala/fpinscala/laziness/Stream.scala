@@ -2,6 +2,8 @@ package fpinscala.laziness
 
 import Stream._
 import fpinscala.laziness.Algebras.Transducer
+import fpinscala.laziness.StreamF._
+import fpinscala.laziness.Transducers._
 
 trait Stream[+A] {
 
@@ -52,10 +54,13 @@ trait Stream[+A] {
     foldRight(empty[B])( (a, b) => cons(f(a), b))
 
   def map2[B](f: A => B): Stream[B] =
-    runWithTransducer(Stream.map[A, B, Stream[B]](f))
+    runWithTransducer(Transducers.map[A, B, Stream[B]](f))
 
   def filter(p: A => Boolean): Stream[A] =
     foldRight(empty[A])( (a, acc) => if (p(a)) cons(a, acc) else acc)
+
+  def filter2(p: A => Boolean): Stream[A] =
+    runWithTransducer(Transducers.filter[A, Stream[A]](p))
 
   def append[B >: A](s: Stream[B]): Stream[B] =
     foldRight(s)(cons(_, _))
@@ -64,6 +69,9 @@ trait Stream[+A] {
     foldRight(empty[B]) { (a, st) =>
       f(a).append(st)
     }
+
+  def flatMap2[B](f: A => Stream[B]): Stream[B] =
+    runWithTransducer(Transducers.flatMap[A, B, Stream[B]](f))
   // 5.7 map, filter, append, flatmap using foldRight. Part of the exercise is
   // writing your own function signatures.
 
@@ -122,7 +130,7 @@ trait Stream[+A] {
       case EmptyF => z
       case ConsF(h, tl) => f(h(), tl())
     }
-    foldRight[D](alg(EmptyF))((h, t) => alg(ConsF(() => h, () => t)))
+    foldRight[D](alg(emptyF))((h, t) => alg(consF(h, t)))
   }
 
   def runWithTransducer[D, AA >: A, X](
@@ -143,6 +151,16 @@ object Algebras {
   type CoAlgebra[F[_], A] = A => F[A]
   type Transducer[F[_], A, G[_], B] = Algebra[F,A] => Algebra[G, B]
   type CoTransducer[F[_], A, G[_], B] = CoAlgebra[F,A] => CoAlgebra[G, B]
+}
+
+object StreamF {
+  def consF[A, B](hd: => A, tl: => B): StreamF[A, B] = {
+    lazy val head = hd
+    lazy val tail = tl
+    ConsF(() => head, () => tail)
+  }
+
+  def emptyF[A, B]: StreamF[A, B] = EmptyF
 }
 
 object Stream {
@@ -183,21 +201,39 @@ object Stream {
   def constantUnfold[A](a: A): Stream[A] = unfold(a)(s => Some((s, s)))
   val onesUnfold: Stream[Int] = constantUnfold(1)
 
+}
+
+object Transducers {
   def scan[B, A]: Transducer[StreamF[A, *], B, StreamF[A, *], (B, Stream[B])] = { xf =>
   {
     case EmptyF =>
-      val b: B = xf(EmptyF)
+      val b: B = xf(emptyF)
       (b, Stream(b))
     case ConsF(hd, tl) =>
       lazy val t = tl()
-      lazy val b: B = xf(ConsF(hd, () => t._1))
+      lazy val b: B = xf(consF(hd(), t._1))
       (b, cons(b, t._2))
   }
   }
 
   def map[A, B, C](f: A => B): Transducer[StreamF[B, *], C, StreamF[A, *], C] = { xf => {
-    case EmptyF => xf(EmptyF)
-    case ConsF(h, t) => xf(ConsF(() => f(h()), t))
+    case EmptyF => xf(emptyF)
+    case ConsF(h, t) => xf(consF(f(h()), t()))
+  }
+  }
+
+  def filter[A, C](f: A => Boolean): Transducer[StreamF[A, *], C, StreamF[A, *], C] = { xf => {
+    case EmptyF => xf(emptyF)
+    case ConsF(h, t) =>
+      val hd = h()
+      if (f(hd)) xf(consF(hd, t())) else t()
+  }
+  }
+
+  def flatMap[A, B, C](f: A => Stream[B]): Transducer[StreamF[B, *], C, StreamF[A, *], C] = { xf => {
+    case EmptyF => xf(emptyF)
+    case ConsF(h, t) =>
+      f(h()).foldRight[C](t())((hd, tl) => xf(consF(hd, tl)))
   }
   }
 }
@@ -207,5 +243,13 @@ object test extends App {
 
   println(Stream(1,2,3,4).scanRight(0)(_ + _).toList())
 
-  println(Stream(1,2,3).map2(5.*).toList())
+  println(Stream(1,2,3).map2(5.*).filter2(_ % 10 != 0).toList())
+
+  println(
+    Stream(1,2,3)
+      .runWithTransducer(Transducers.map[Int, Int, Stream[Int]](5 * _).compose(Transducers.filter(_ % 10 != 0))
+      )
+      .flatMap2(x => Stream.constant(x).take(x))
+      .toList()
+  )
 }
