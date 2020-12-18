@@ -11,7 +11,7 @@ trait Stream[+A] {
       case _ => z
     }
 
-  def scanRight[B](z: => B)(f: (A, => B) => B): Stream[B] = foldWithTransducer[B, (B,Stream[B]), A](scan)(z)(f)._2
+  def scanRight[B](z: => B)(f: (A, => B) => B): Stream[B] = foldWithTransducer[B, (B,Stream[B]), A, A](scan)(z)(f)._2
 
   def exists(p: A => Boolean): Boolean =
     foldRight(false)((a, b) => p(a) || b) // Here `b` is the unevaluated recursive step that folds the tail of the stream. If `p(a)` returns `true`, `b` will never be evaluated and the computation terminates early.
@@ -110,27 +110,23 @@ trait Stream[+A] {
       case _ => None
     }
 
-  def scan[B, C >: A]: Transducer[StreamF[C, *], B, StreamF[C, *], (B, Stream[B])] = { xf =>
-    {
-      case EmptyF =>
-        val b: B = xf(EmptyF)
-        (b, Stream(b))
-      case ConsF(hd, tl) =>
-        lazy val t = tl()
-        lazy val b: B = xf(ConsF(hd, () => t._1))
-        (b, cons(b, t._2))
-    }
-  }
 
-  def foldWithTransducer[B, D, C >: A](
-    transducer: Transducer[StreamF[C, *], B, StreamF[C, *], D]
-  )(z: => B)(f: (C, => B) => B): D = {
+
+  def foldWithTransducer[B, D, AA >: A, X](
+    transducer: Transducer[StreamF[X, *], B, StreamF[AA, *], D]
+  )(z: => B)(f: (X, => B) => B): D = {
     val alg = transducer {
       case EmptyF => z
       case ConsF(h, tl) => f(h(), tl())
     }
     foldRight[D](alg(EmptyF))((h, t) => alg(ConsF(() => h, () => t)))
   }
+
+  def runWithTransducer[D, AA >: A, X](
+    transducer: Transducer[StreamF[X, *], Stream[X], StreamF[AA, *], D]
+  ): D = foldWithTransducer(transducer)(empty[X])( (a,b) => cons(a, b))
+
+
 }
 case object Empty extends Stream[Nothing]
 case class Cons[+A](h: () => A, t: () => Stream[A]) extends Stream[A]
@@ -182,6 +178,18 @@ object Stream {
   }
   def constantUnfold[A](a: A): Stream[A] = unfold(a)(s => Some((s, s)))
   val onesUnfold: Stream[Int] = constantUnfold(1)
+
+  def scan[B, A]: Transducer[StreamF[A, *], B, StreamF[A, *], (B, Stream[B])] = { xf =>
+  {
+    case EmptyF =>
+      val b: B = xf(EmptyF)
+      (b, Stream(b))
+    case ConsF(hd, tl) =>
+      lazy val t = tl()
+      lazy val b: B = xf(ConsF(hd, () => t._1))
+      (b, cons(b, t._2))
+  }
+  }
 }
 
 object test extends App {
