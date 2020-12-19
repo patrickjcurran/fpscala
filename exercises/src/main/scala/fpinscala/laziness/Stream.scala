@@ -1,7 +1,7 @@
 package fpinscala.laziness
 
 import Stream._
-import fpinscala.laziness.Algebras.Transducer
+import fpinscala.laziness.Algebras._
 import fpinscala.laziness.StreamF._
 import fpinscala.laziness.Transducers._
 
@@ -55,6 +55,9 @@ trait Stream[+A] {
 
   def map2[B](f: A => B): Stream[B] =
     runWithTransducer(Transducers.map[A, B, Stream[B]](f))
+
+  def map3[B](f: A => B): Stream[B] =
+    runWithCoTransducer(CoTransducers.map[A, B, Stream[A]](f))
 
   def filter(p: A => Boolean): Stream[A] =
     foldRight(empty[A])( (a, acc) => if (p(a)) cons(a, acc) else acc)
@@ -137,7 +140,13 @@ trait Stream[+A] {
     transducer: Transducer[StreamF[X, *], Stream[X], StreamF[AA, *], D]
   ): D = foldWithTransducer(transducer)(empty[X])( (a,b) => cons(a, b))
 
-
+  def runWithCoTransducer[B, AA >: A, X](
+    coTransducer: CoTransducer[StreamF[X, *], Stream[X], StreamF[B, *], Stream[AA]]
+  ): Stream[B] =
+    unfoldWithCoTransducer[Stream[X], Stream[AA], B, X](coTransducer)(this) {
+      case Empty => None
+      case Cons(h, t) => Some((h(), t()))
+    }
 
 }
 case object Empty extends Stream[Nothing]
@@ -191,6 +200,20 @@ object Stream {
     case Some((a, s)) => cons(a, unfold(s)(f))
   }
 
+  def unfoldWithCoTransducer[B, D, A, X](
+    coTransducer: CoTransducer[StreamF[X, *], B, StreamF[A, *], D]
+  )(z: D)(f: B => Option[(X, B)]): Stream[A] = {
+    val coAlgebra: CoAlgebra[StreamF[A, *], D] = coTransducer { b =>
+      f(b).fold(emptyF[X,B]) { case (x, b) => consF(x, b) }
+    }
+
+    unfold(z)(coAlgebra.andThen {
+      case EmptyF => None
+      case ConsF(a, d) => Some((a(), d()))
+    })
+  }
+
+
   val fibsUnfold: Stream[Int] = unfold((0,1)) {
     case (n0, n1) => Some((n0, (n1, n0 + n1)))
   }
@@ -238,12 +261,24 @@ object Transducers {
   }
 }
 
+object CoTransducers {
+
+  def map[A,B,C](f: A => B): CoTransducer[StreamF[A, *], C, StreamF[B, *], C] = {cxf => c =>
+    cxf(c) match {
+      case EmptyF => EmptyF
+      case ConsF(h, t) => consF(f(h()), t())
+    }
+  }
+
+}
+
 object test extends App {
   println(fibsUnfold.take(10).toList())
 
   println(Stream(1,2,3,4).scanRight(0)(_ + _).toList())
 
   println(Stream(1,2,3).map2(5.*).filter2(_ % 10 != 0).toList())
+  println(Stream(1,2,3).map3(5.*).filter2(_ % 10 != 0).toList())
 
   println(
     Stream(1,2,3)
