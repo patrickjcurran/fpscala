@@ -152,17 +152,25 @@ trait Stream[+A] {
 case object Empty extends Stream[Nothing]
 case class Cons[+A](h: () => A, t: () => Stream[A]) extends Stream[A]
 
-sealed trait StreamF[+A, +B]
+sealed trait StreamF[+A, +X]
 case object EmptyF extends StreamF[Nothing, Nothing]
-case class ConsF[+A, +B](h: () => A, t: () => B) extends StreamF[A, B]
+case class ConsF[+A, +X](h: () => A, t: () => X) extends StreamF[A, X]
+
+
 object Algebras {
-  type Algebra[F[_], A] = F[A] => A
-  type CoAlgebra[F[_], A] = A => F[A]
-  type Transducer[F[_], A, G[_], B] = Algebra[F,A] => Algebra[G, B]
-  type CoTransducer[F[_], A, G[_], B] = CoAlgebra[F,A] => CoAlgebra[G, B]
+  type Algebra[F[_], X] = F[X] => X
+  type CoAlgebra[F[_], X] = X => F[X]
+  type Transducer[F[_], X, G[_], Y] = Algebra[F,X] => Algebra[G, Y]
+  type CoTransducer[F[_], X, G[_], B] = CoAlgebra[F,X] => CoAlgebra[G, B]
 }
 
 object StreamF {
+  type StreamFAlg[A, X] = Algebra[StreamF[A, *], X]
+  type StreamFCoAlg[A, X] = CoAlgebra[StreamF[A, *], X]
+
+  type StreamTransducer[A, X, B, Y] = StreamFAlg[A, X] => StreamFAlg[B, Y]
+  type StreamCoTransducer[A, X, B, Y] = StreamFCoAlg[A, X] => StreamFCoAlg[B, Y]
+
   def consF[A, B](hd: => A, tl: => B): StreamF[A, B] = {
     lazy val head = hd
     lazy val tail = tl
@@ -170,6 +178,38 @@ object StreamF {
   }
 
   def emptyF[A, B]: StreamF[A, B] = EmptyF
+
+  def foldAlg[A, X](s: Stream[A])(alg: StreamFAlg[A, X]): X =
+    s.foldRight(alg(EmptyF))( (a, x) => alg(consF(a, x)))
+
+  def initialAlg[A]: StreamFAlg[A, Stream[A]] = {
+    case EmptyF => empty[A]
+    case ConsF(h, t) => cons(h(), t())
+  }
+
+  def foldWithTransducer[A, X, B, Y](s: Stream[B])(xf: StreamTransducer[A, X, B, Y])(alg: StreamFAlg[A, X]): Y =
+    foldAlg(s)(xf(alg))
+
+  def runWithTransducer[A, B, Y](s: Stream[B])(xf: StreamTransducer[A, Stream[A], B, Y]): Y =
+    foldWithTransducer(s)(xf)(initialAlg[A])
+
+  def unfoldCoAlg[A, X](x: X)(coAlgebra: StreamFCoAlg[A, X]): Stream[A] =
+    Stream.unfold(x)(coAlgebra.andThen {
+      case EmptyF => None
+      case ConsF(h, t) => Some((h(), t()))
+    }
+    )
+
+  def initialCoAlgebra[A]: StreamFCoAlg[A, Stream[A]] = {
+    case Empty => EmptyF
+    case Cons(h, t) => ConsF(h, t)
+  }
+
+  def unfoldWithTransducer[A, X, B, Y](y: Y)(xf: StreamCoTransducer[A, X, B, Y])(coAlg: StreamFCoAlg[A, X]): Stream[B] =
+    unfoldCoAlg(y)(xf(coAlg))
+
+  def runWithConTransducer[A, B, Y](y: Y)(xf: StreamCoTransducer[A, Stream[A], B, Y]): Stream[B] =
+    unfoldWithTransducer(y)(xf)(initialCoAlgebra)
 }
 
 object Stream {
