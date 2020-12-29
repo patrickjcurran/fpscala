@@ -54,7 +54,7 @@ trait Stream[+A] {
     foldRight(empty[B])( (a, b) => cons(f(a), b))
 
   def map2[B](f: A => B): Stream[B] =
-    runWithTransducer(Transducers.map[A, B, Stream[B]](f))
+    runWithTransducer(Transducers.map(f).asTransducer[Stream[B]])
 
   def map3[B](f: A => B): Stream[B] =
     runWithCoTransducer(CoTransducers.map[A, B, Stream[A]](f))
@@ -200,7 +200,7 @@ object StreamF {
     }
     )
 
-  def initialCoAlgebra[A]: StreamFCoAlg[A, Stream[A]] = {
+  def finalCoAlgebra[A]: StreamFCoAlg[A, Stream[A]] = {
     case Empty => EmptyF
     case Cons(h, t) => ConsF(h, t)
   }
@@ -209,7 +209,27 @@ object StreamF {
     unfoldCoAlg(y)(xf(coAlg))
 
   def runWithConTransducer[A, B, Y](y: Y)(xf: StreamCoTransducer[A, Stream[A], B, Y]): Stream[B] =
-    unfoldWithTransducer(y)(xf)(initialCoAlgebra)
+    unfoldWithTransducer(y)(xf)(finalCoAlgebra)
+}
+
+
+trait FunctionK[F[_], G[_]] { self =>
+  def apply[A](fa: F[A]): G[A]
+
+
+  def compose[E[_]](f: FunctionK[E, F]): FunctionK[E, G] =
+    λ[FunctionK[E, G]](fa => self(f(fa)))
+
+  def andThen[H[_]](f: FunctionK[G, H]): FunctionK[F, H] =
+    f.compose(self)
+
+  def asTransducer[X]: Transducer[G, X, F, X] = { alg => fa =>
+    alg(this(fa))
+  }
+
+  def asCoTransducer[X]: CoTransducer[F, X, G, X] = { coAlg => x =>
+    this(coAlg(x))
+  }
 }
 
 object Stream {
@@ -279,19 +299,18 @@ object Transducers {
   }
   }
 
-  def map[A, B, C](f: A => B): Transducer[StreamF[B, *], C, StreamF[A, *], C] = { xf => {
-    case EmptyF => xf(emptyF)
-    case ConsF(h, t) => xf(consF(f(h()), t()))
-  }
-  }
+  def map[A, B](f: A => B): FunctionK[StreamF[A, *], StreamF[B, *]] =
+    λ[FunctionK[StreamF[A, *], StreamF[B, *]]]{
+      case EmptyF => emptyF
+      case ConsF(h, t) => consF(f(h()), t())
+    }
 
   def filter[A, C](f: A => Boolean): Transducer[StreamF[A, *], C, StreamF[A, *], C] = { xf => {
     case EmptyF => xf(emptyF)
     case ConsF(h, t) =>
       val hd = h()
       if (f(hd)) xf(consF(hd, t())) else t()
-  }
-  }
+  }}
 
   def flatMap[A, B, C](f: A => Stream[B]): Transducer[StreamF[B, *], C, StreamF[A, *], C] = { xf => {
     case EmptyF => xf(emptyF)
@@ -317,12 +336,12 @@ object test extends App {
 
   println(Stream(1,2,3,4).scanRight(0)(_ + _).toList())
 
-  println(Stream(1,2,3).map2(5.*).filter2(_ % 10 != 0).toList())
+  println(Stream(1,2,3,4,5,6,7).map2(5.*).filter2(_ % 10 != 0).toList())
   println(Stream(1,2,3).map3(5.*).filter2(_ % 10 != 0).toList())
 
   println(
     Stream(1,2,3)
-      .runWithTransducer(Transducers.map[Int, Int, Stream[Int]](5 * _).compose(Transducers.filter(_ % 10 != 0))
+      .runWithTransducer(Transducers.map[Int, Int](5 * _).asTransducer[Stream[Int]].compose(Transducers.filter(_ % 10 != 0))
       )
       .flatMap2(x => Stream.constant(x).take(x))
       .toList()
